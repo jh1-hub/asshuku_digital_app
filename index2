@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>【改良版】ランレングス圧縮（RLE）シミュレーター</title>
+    <style>
+        /* (CSSは前回のコードと同一です。ここでは省略します) */
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.6; background-color: #f4f4f4; color: #333; max-width: 900px; margin: 20px auto; padding: 20px; }
+        h1, h2 { border-bottom: 2px solid #007BFF; padding-bottom: 5px; }
+        button { background-color: #007BFF; color: white; border: none; padding: 10px 15px; margin: 5px; border-radius: 5px; cursor: pointer; font-size: 16px; transition: background-color 0.3s; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #aaa; cursor: not-allowed; }
+        #clear-btn { background-color: #dc3545; }
+        #clear-btn:hover { background-color: #a71d2a; }
+        .sample-btn { background-color: #28a745; }
+        .sample-btn:hover { background-color: #1e7e34; }
+        .container { display: flex; gap: 20px; }
+        .left-panel { flex: 1; }
+        .right-panel { flex: 2; background-color: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        #grid-container { display: grid; grid-template-columns: repeat(8, 30px); grid-template-rows: repeat(8, 30px); border: 2px solid #333; width: 240px; height: 240px; margin-bottom: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .pixel { width: 30px; height: 30px; border: 1px solid #ddd; box-sizing: border-box; cursor: pointer; transition: background-color 0.1s; }
+        .pixel.white { background-color: #ffffff; }
+        .pixel.black { background-color: #000000; }
+        .result-box { background-color: #f9f9f9; border: 1px solid #ddd; padding: 10px; margin-bottom: 15px; border-radius: 5px; word-wrap: break-word; }
+        h3 { margin-top: 0; margin-bottom: 10px; }
+        #original-data span { display: inline-block; padding: 2px; font-family: monospace; font-size: 1.1em; transition: background-color 0.1s; }
+        #original-data span.scanning { background-color: #ffd700; border-radius: 3px; }
+        #compression-process { font-family: monospace; font-size: 1.1em; font-weight: bold; color: #d9534f; height: 3em; }
+        #compressed-data { font-family: monospace; font-size: 1.1em; font-weight: bold; color: #007BFF; }
+        #compression-stats { font-size: 1.1em; font-weight: bold; }
+
+        /* --- ここから追加・変更 --- */
+        #mode-select {
+            background-color: #e9ecef;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+        #mode-select label {
+            display: block;
+            margin-bottom: 5px;
+            cursor: pointer;
+        }
+        #mode-select input {
+            margin-right: 8px;
+        }
+        /* --- ここまで追加・変更 --- */
+    </style>
+</head>
+<body>
+
+    <h1>【改良版】ランレングス圧縮（RLE）シミュレーター</h1>
+    <p>圧縮モードを選択し、2種類のアルゴリズムの違いを比較しよう。</p>
+
+    <div class="container">
+        <div class="left-panel">
+            <h2>① キャンバス (8x8)</h2>
+            <p>マスをクリックして白(W)と黒(B)を切り替えよう。</p>
+            <div id="grid-container"></div>
+            
+            <h3>圧縮モードの選択</h3>
+            <div id="mode-select">
+                <label>
+                    <input type="radio" id="mode-standard" name="compression-mode" value="standard" checked>
+                    <strong>標準モード</strong> (例: W4B2)
+                    <small>(多色にも対応できる汎用型)</small>
+                </label>
+                <label>
+                    <input type="radio" id="mode-optimized" name="compression-mode" value="optimized">
+                    <strong>2色最適化モード</strong> (例: 4, 2, 2)
+                    <small>(白の個数, 黒の個数, ... の順)</small>
+                </label>
+            </div>
+            <button id="compress-btn">圧縮する</button>
+            <button id="clear-btn">クリア</button>
+            <br>
+            <button class="sample-btn" id="sample1-btn">サンプル1 (圧縮しやすい)</button>
+            <button class="sample-btn" id="sample2-btn">サンプル2 (圧縮しにくい)</button>
+        </div>
+
+        <div class="right-panel">
+            <h2>② 処理・結果エリア</h2>
+            <h3>元データ (1次元化)</h3>
+            <div class="result-box" id="original-data-container">
+                <div id="original-data">ここに1次元化されたデータが表示される</div>
+            </div>
+            <h3>圧縮プロセス（視覚化）</h3>
+            <div class="result-box" id="compression-process">
+                圧縮ボタンを押すと、スキャンの様子がここに表示される
+            </div>
+            <h3>圧縮後データ</h3>
+            <div class="result-box" id="compressed-data">
+                ここに圧縮されたデータが表示される
+            </div>
+            <h3>圧縮率</h3>
+            <div class="result-box" id="compression-stats">
+                ここに圧縮率が表示される
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 設定 ---
+        const GRID_SIZE = 8;
+        const DELAY_MS = 100; // 視覚化のアニメーション速度 (ミリ秒)
+
+        // --- DOM要素の取得 ---
+        const gridContainer = document.getElementById('grid-container');
+        const compressBtn = document.getElementById('compress-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const sample1Btn = document.getElementById('sample1-btn');
+        const sample2Btn = document.getElementById('sample2-btn');
+        
+        const originalDataEl = document.getElementById('original-data');
+        const processEl = document.getElementById('compression-process');
+        const compressedDataEl = document.getElementById('compressed-data');
+        const statsEl = document.getElementById('compression-stats');
+
+        let isCompressing = false;
+
+        // --- グリッドの初期化 (変更なし) ---
+        function initGrid() {
+            gridContainer.innerHTML = '';
+            for (let i = 0; i < GRID_SIZE * GRID_SIZE; i++) {
+                const pixel = document.createElement('div');
+                pixel.classList.add('pixel', 'white');
+                pixel.dataset.color = 'W';
+                pixel.addEventListener('click', () => togglePixel(pixel));
+                gridContainer.appendChild(pixel);
+            }
+        }
+
+        // --- ピクセルの色をトグル (変更なし) ---
+        function togglePixel(pixel) {
+            if (isCompressing) return;
+            if (pixel.dataset.color === 'W') {
+                pixel.dataset.color = 'B';
+                pixel.classList.remove('white');
+                pixel.classList.add('black');
+            } else {
+                pixel.dataset.color = 'W';
+                pixel.classList.remove('black');
+                pixel.classList.add('white');
+            }
+        }
+
+        // --- グリッドをクリア (変更なし) ---
+        function clearGrid() {
+            if (isCompressing) return;
+            const pixels = gridContainer.querySelectorAll('.pixel');
+            pixels.forEach(pixel => {
+                pixel.dataset.color = 'W';
+                pixel.classList.remove('black');
+                pixel.classList.add('white');
+            });
+            resetResults();
+        }
+
+        // --- 結果表示をリセット (変更なし) ---
+        function resetResults() {
+            originalDataEl.innerHTML = 'ここに1次元化されたデータが表示される';
+            processEl.innerHTML = '圧縮ボタンを押すと、スキャンの様子がここに表示される';
+            compressedDataEl.innerHTML = 'ここに圧縮されたデータが表示される';
+            statsEl.innerHTML = 'ここに圧縮率が表示される';
+        }
+
+        // --- サンプルデータの読み込み (変更なし) ---
+        function loadSample(pattern) {
+            if (isCompressing) return;
+            const pixels = gridContainer.querySelectorAll('.pixel');
+            pixels.forEach((pixel, index) => {
+                const color = pattern[index];
+                pixel.dataset.color = color;
+                if (color === 'B') {
+                    pixel.classList.remove('white');
+                    pixel.classList.add('black');
+                } else {
+                    pixel.classList.remove('black');
+                    pixel.classList.add('white');
+                }
+            });
+            resetResults();
+        }
+        const samplePattern1 = [ /* (変更なし) */ 'W','W','W','W','W','W','W','W','W','W','W','W','W','W','W','W','B','B','B','B','B','B','B','B','B','B','B','B','B','B','B','B','W','W','W','W','W','W','W','W','W','W','W','W','W','W','W','W','B','B','B','B','B','B','B','B','B','B','B','B','B','B','B','B', ];
+        const samplePattern2 = [ /* (変更なし) */ 'W','B','W','B','W','B','W','B','B','W','B','W','B','W','B','W','W','B','W','B','W','B','W','B','B','W','B','W','B','W','B','W','W','B','W','B','W','B','W','B','B','W','B','W','B','W','B','W','W','B','W','B','W','B','W','B','B','W','B','W','B','W','B','W', ];
+
+
+        // --- ▼▼▼ 圧縮ロジック (メイン) を変更 ▼▼▼ ---
+        async function startCompression() {
+            if (isCompressing) return;
+            isCompressing = true;
+            toggleButtons(false);
+            resetResults();
+
+            // 1. 1次元データとスパンの準備 (共通)
+            const pixels = gridContainer.querySelectorAll('.pixel');
+            const originalData = Array.from(pixels).map(p => p.dataset.color);
+            originalDataEl.innerHTML = '';
+            const spans = originalData.map(char => {
+                const span = document.createElement('span');
+                span.textContent = char;
+                originalDataEl.appendChild(span);
+                return span;
+            });
+
+            const originalSize = originalData.length;
+
+            // 2. 選択されたモードを取得
+            const selectedMode = document.querySelector('input[name="compression-mode"]:checked').value;
+
+            let compressedString = "";
+            let compressedSize = 0;
+
+            // 3. モードに応じて圧縮プロセスを実行
+            if (selectedMode === 'standard') {
+                // --- 標準モード (W4B2...) ---
+                compressedString = await runStandardCompression(originalData, spans);
+            } else {
+                // --- 2色最適化モード (4, 2, 2...) ---
+                compressedString = await runOptimizedCompression(originalData, spans);
+            }
+
+            // 4. 圧縮率の計算 (共通)
+            compressedSize = compressedString.length;
+            const ratio = (compressedSize / originalSize) * 100;
+            
+            let statsMessage = `元データサイズ: ${originalSize} 文字<br>`;
+            statsMessage += `圧縮後データサイズ: ${compressedSize} 文字<br>`;
+            statsMessage += `<strong>圧縮率: ${ratio.toFixed(1)}%</strong>`;
+
+            if (ratio < 100) {
+                statsMessage += ` (データ量が ${ (100 - ratio).toFixed(1) }% 削減されました)`;
+            } else if (ratio > 100) {
+                statsMessage += ` (データ量が ${ (ratio - 100).toFixed(1) }% 増加しました)`;
+            } else {
+                statsMessage += ` (データ量は変わりませんでした)`;
+            }
+            statsEl.innerHTML = statsMessage;
+
+            isCompressing = false;
+            toggleButtons(true);
+        }
+
+        // --- 標準モード (W4B2) のロジック ---
+        async function runStandardCompression(originalData, spans) {
+            let compressedString = "";
+            const originalSize = originalData.length;
+
+            for (let i = 0; i < originalSize; i++) {
+                let count = 1;
+                let currentColor = originalData[i];
+
+                spans[i].classList.add('scanning');
+                processEl.innerHTML = `[${currentColor}] をスキャン中... (Count: ${count})`;
+                await sleep(DELAY_MS);
+
+                while (i + 1 < originalSize && originalData[i + 1] === currentColor) {
+                    i++;
+                    count++;
+                    spans[i].classList.add('scanning');
+                    processEl.innerHTML = `[${currentColor}] をスキャン中... (Count: ${count})`;
+                    await sleep(DELAY_MS);
+                }
+
+                const compressedPart = currentColor + count;
+                compressedString += compressedPart;
+                
+                processEl.innerHTML = `<b>[${currentColor}]</b> が <b>${count}</b> 個。→ "${compressedPart}" を追加`;
+                compressedDataEl.textContent = compressedString;
+                await sleep(DELAY_MS * 2);
+
+                spans.forEach(span => span.classList.remove('scanning'));
+            }
+            processEl.innerHTML = "圧縮が完了しました。（標準モード）";
+            return compressedString;
+        }
+
+        // --- 2色最適化モード (4, 2, 2) のロジック ---
+        async function runOptimizedCompression(originalData, spans) {
+            let compressedParts = [];
+            const originalSize = originalData.length;
+            let expectedColor = 'W'; // 常に白(W)からスタート
+            let i = 0;
+
+            while (i < originalSize) {
+                let count = 0;
+
+                // 1. expectedColor (W または B) が何個続くかカウント
+                while (i < originalSize && originalData[i] === expectedColor) {
+                    spans[i].classList.add('scanning');
+                    count++;
+                    processEl.innerHTML = `[${expectedColor}] をスキャン中... (Count: ${count})`;
+                    await sleep(DELAY_MS);
+                    i++;
+                }
+
+                // 2. カウント結果を追加
+                compressedParts.push(count);
+                const compressedString = compressedParts.join(', '); // 表示用にカンマ区切り
+
+                processEl.innerHTML = `<b>[${expectedColor}]</b> が <b>${count}</b> 個。→ "${count}" を追加`;
+                compressedDataEl.textContent = compressedString;
+                await sleep(DELAY_MS * 2);
+                
+                spans.forEach(span => span.classList.remove('scanning'));
+
+                // 3. 期待する色を反転
+                expectedColor = (expectedColor === 'W') ? 'B' : 'W';
+                
+                // 4. もしループが終わったのに、最後の色が0個だった場合 (例: W W B B で終わった後、次のWを探すが0個)
+                // このロジックだと、次に探す色が見つからなければ i は進まず、無限ループになる。
+                // 修正： i はカウント分進んでいる。もし i が終端に達し、かつ最後の expectedColor が 0 個だった場合、
+                // 次のループ (while (i < originalSize)) に入らない。そのままで良い。
+                // 例: WWBB (W:2, B:2)
+                // i=0, expected='W'. count=2. i=2. parts=[2]. expected='B'
+                // i=2, expected='B'. count=2. i=4. parts=[2, 2]. expected='W'
+                // i=4. ループ終了。
+                
+                // 例: WW (W:2, B:0)
+                // i=0, expected='W'. count=2. i=2. parts=[2]. expected='B'
+                // i=2. ループ終了。
+                // これだと B:0 が追加されない。
+            }
+
+            // ループ終了後、もし最後に探した色が0個だった場合、それを追加する
+            // (例: データがWWで終わった場合、W:2 の後、B:0 を追加する必要がある)
+            if (compressedParts.length % 2 === 1) { // 奇数個＝Wまでしかカウントしてない
+                 compressedParts.push(0); // 最後のB:0を追加
+                 const compressedString = compressedParts.join(', ');
+                 processEl.innerHTML = `<b>[${expectedColor}]</b> が <b>0</b> 個。→ "0" を追加`;
+                 compressedDataEl.textContent = compressedString;
+                 await sleep(DELAY_MS * 2);
+            }
+            
+            // 注：圧縮後のデータサイズ比較のため、カンマも1文字としてカウントする
+            const finalCompressedString = compressedParts.join(','); 
+            processEl.innerHTML = "圧縮が完了しました。（2色最適化モード）";
+            
+            // 最後のデータが 0,0,0 のようにならないよう、末尾の0を削除する（任意）
+            // ...が、教育用としては「ルール通りに記録した結果」を見せる方が良いので、末尾の0は残す。
+
+            return finalCompressedString;
+        }
+
+        // --- ユーティリティ (変更なし) ---
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+        function toggleButtons(enable) {
+            compressBtn.disabled = !enable;
+            clearBtn.disabled = !enable;
+            sample1Btn.disabled = !enable;
+            sample2Btn.disabled = !enable;
+            
+            // ラジオボタンも操作不可に
+            document.querySelectorAll('#mode-select input').forEach(radio => {
+                radio.disabled = !enable;
+            });
+        }
+
+        // --- イベントリスナーの登録 (変更なし) ---
+        compressBtn.addEventListener('click', startCompression);
+        clearBtn.addEventListener('click', clearGrid);
+        sample1Btn.addEventListener('click', () => loadSample(samplePattern1));
+        sample2Btn.addEventListener('click', () => loadSample(samplePattern2));
+
+        // --- 初期化実行 (変更なし) ---
+        initGrid();
+        resetResults();
+    </script>
+</body>
+</html>
