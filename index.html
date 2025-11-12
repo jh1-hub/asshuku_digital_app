@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ランレングス圧縮（RLE）シミュレーター</title>
+    <style>
+        /* 全体のスタイル */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            background-color: #f4f4f4;
+            color: #333;
+            max-width: 900px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        h1, h2 {
+            border-bottom: 2px solid #007BFF;
+            padding-bottom: 5px;
+        }
+        button {
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #aaa;
+            cursor: not-allowed;
+        }
+        /* クリアボタン */
+        #clear-btn {
+            background-color: #dc3545;
+        }
+        #clear-btn:hover {
+            background-color: #a71d2a;
+        }
+        /* サンプルボタン */
+        .sample-btn {
+            background-color: #28a745;
+        }
+        .sample-btn:hover {
+            background-color: #1e7e34;
+        }
+        /* グリッドと結果のレイアウト */
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .left-panel {
+            flex: 1;
+        }
+        .right-panel {
+            flex: 2;
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        /* ① ピクセルアート・キャンバス */
+        #grid-container {
+            display: grid;
+            grid-template-columns: repeat(8, 30px);
+            grid-template-rows: repeat(8, 30px);
+            border: 2px solid #333;
+            width: 240px; /* 8 * 30px */
+            height: 240px; /* 8 * 30px */
+            margin-bottom: 15px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .pixel {
+            width: 30px;
+            height: 30px;
+            border: 1px solid #ddd;
+            box-sizing: border-box; /* Boderを含めたサイズ計算 */
+            cursor: pointer;
+            transition: background-color 0.1s;
+        }
+        .pixel.white { background-color: #ffffff; }
+        .pixel.black { background-color: #000000; }
+
+        /* ② 処理・結果エリア */
+        .result-box {
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-bottom: 15px;
+            border-radius: 5px;
+            word-wrap: break-word; /* 長い文字列の折り返し */
+        }
+        h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+        }
+
+        /* 1次元データ（スキャン中ハイライト） */
+        #original-data span {
+            display: inline-block;
+            padding: 2px;
+            font-family: monospace;
+            font-size: 1.1em;
+            transition: background-color 0.1s;
+        }
+        #original-data span.scanning {
+            background-color: #ffd700; /* スキャン中の色（黄色）*/
+            border-radius: 3px;
+        }
+        
+        /* 圧縮プロセス（視覚化） */
+        #compression-process {
+            font-family: monospace;
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #d9534f; /* 目立つ色（赤系）*/
+            height: 3em; /* 2行分の高さを確保 */
+        }
+
+        /* 圧縮後データ */
+        #compressed-data {
+            font-family: monospace;
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #007BFF;
+        }
+
+        /* 圧縮率 */
+        #compression-stats {
+            font-size: 1.1em;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>ランレングス圧縮（RLE）シミュレーター</h1>
+    <p>情報Ⅰ「圧縮」単元用。白黒（W/B）のピクセルアートを描き、「圧縮」ボタンを押すと圧縮のプロセスが視覚化される。</p>
+
+    <div class="container">
+        <div class="left-panel">
+            <h2>① キャンバス (8x8)</h2>
+            <p>マスをクリックして白(W)と黒(B)を切り替えよう。</p>
+            <div id="grid-container"></div>
+            
+            <button id="compress-btn">圧縮する</button>
+            <button id="clear-btn">クリア</button>
+            <br>
+            <button class="sample-btn" id="sample1-btn">サンプル1 (圧縮しやすい)</button>
+            <button class="sample-btn" id="sample2-btn">サンプル2 (圧縮しにくい)</button>
+        </div>
+
+        <div class="right-panel">
+            <h2>② 処理・結果エリア</h2>
+
+            <h3>元データ (1次元化)</h3>
+            <div class="result-box" id="original-data-container">
+                <div id="original-data">ここに1次元化されたデータが表示される (例: WWWWBB...)</div>
+            </div>
+
+            <h3>圧縮プロセス（視覚化）</h3>
+            <div class="result-box" id="compression-process">
+                圧縮ボタンを押すと、スキャンの様子がここに表示される
+            </div>
+
+            <h3>圧縮後データ</h3>
+            <div class="result-box" id="compressed-data">
+                ここに圧縮されたデータが表示される (例: W4B2...)
+            </div>
+
+            <h3>圧縮率</h3>
+            <div class="result-box" id="compression-stats">
+                ここに圧縮率が表示される
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 設定 ---
+        const GRID_SIZE = 8;
+        const DELAY_MS = 100; // 視覚化のアニメーション速度 (ミリ秒)
+
+        // --- DOM要素の取得 ---
+        const gridContainer = document.getElementById('grid-container');
+        const compressBtn = document.getElementById('compress-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const sample1Btn = document.getElementById('sample1-btn');
+        const sample2Btn = document.getElementById('sample2-btn');
+        
+        const originalDataEl = document.getElementById('original-data');
+        const processEl = document.getElementById('compression-process');
+        const compressedDataEl = document.getElementById('compressed-data');
+        const statsEl = document.getElementById('compression-stats');
+
+        let isCompressing = false; // 圧縮中のフラグ
+
+        // --- グリッドの初期化 ---
+        function initGrid() {
+            gridContainer.innerHTML = '';
+            for (let i = 0; i < GRID_SIZE * GRID_SIZE; i++) {
+                const pixel = document.createElement('div');
+                pixel.classList.add('pixel', 'white');
+                pixel.dataset.color = 'W'; // データとして 'W' (White) を保持
+                pixel.addEventListener('click', () => togglePixel(pixel));
+                gridContainer.appendChild(pixel);
+            }
+        }
+
+        // --- ピクセルの色をトグル ---
+        function togglePixel(pixel) {
+            if (isCompressing) return; // 圧縮中は操作不可
+
+            if (pixel.dataset.color === 'W') {
+                pixel.dataset.color = 'B'; // Black
+                pixel.classList.remove('white');
+                pixel.classList.add('black');
+            } else {
+                pixel.dataset.color = 'W'; // White
+                pixel.classList.remove('black');
+                pixel.classList.add('white');
+            }
+        }
+
+        // --- グリッドをクリア ---
+        function clearGrid() {
+            if (isCompressing) return;
+            
+            const pixels = gridContainer.querySelectorAll('.pixel');
+            pixels.forEach(pixel => {
+                pixel.dataset.color = 'W';
+                pixel.classList.remove('black');
+                pixel.classList.add('white');
+            });
+            resetResults();
+        }
+
+        // --- 結果表示をリセット ---
+        function resetResults() {
+            originalDataEl.innerHTML = 'ここに1次元化されたデータが表示される (例: WWWWBB...)';
+            processEl.innerHTML = '圧縮ボタンを押すと、スキャンの様子がここに表示される';
+            compressedDataEl.innerHTML = 'ここに圧縮されたデータが表示される (例: W4B2...)';
+            statsEl.innerHTML = 'ここに圧縮率が表示される';
+        }
+
+        // --- サンプルデータの読み込み ---
+        function loadSample(pattern) {
+            if (isCompressing) return;
+            
+            const pixels = gridContainer.querySelectorAll('.pixel');
+            pixels.forEach((pixel, index) => {
+                const color = pattern[index]; // 'W' or 'B'
+                pixel.dataset.color = color;
+                if (color === 'B') {
+                    pixel.classList.remove('white');
+                    pixel.classList.add('black');
+                } else {
+                    pixel.classList.remove('black');
+                    pixel.classList.add('white');
+                }
+            });
+            resetResults();
+        }
+
+        // サンプル1: 圧縮しやすい（横縞）
+        const samplePattern1 = [
+            'W','W','W','W','W','W','W','W',
+            'W','W','W','W','W','W','W','W',
+            'B','B','B','B','B','B','B','B',
+            'B','B','B','B','B','B','B','B',
+            'W','W','W','W','W','W','W','W',
+            'W','W','W','W','W','W','W','W',
+            'B','B','B','B','B','B','B','B',
+            'B','B','B','B','B','B','B','B',
+        ];
+
+        // サンプル2: 圧縮しにくい（市松模様）
+        const samplePattern2 = [
+            'W','B','W','B','W','B','W','B',
+            'B','W','B','W','B','W','B','W',
+            'W','B','W','B','W','B','W','B',
+            'B','W','B','W','B','W','B','W',
+            'W','B','W','B','W','B','W','B',
+            'B','W','B','W','B','W','B','W',
+            'W','B','W','B','W','B','W','B',
+            'B','W','B','W','B','W','B','W',
+        ];
+
+        // --- 圧縮ロジック (メイン) ---
+        async function startCompression() {
+            if (isCompressing) return;
+            isCompressing = true;
+            toggleButtons(false); // ボタンを無効化
+
+            resetResults();
+
+            // 1. グリッドから1次元データを生成
+            const pixels = gridContainer.querySelectorAll('.pixel');
+            const originalData = Array.from(pixels).map(p => p.dataset.color); // ['W', 'B', 'W', ...]
+
+            // 2. 元データをスパンで表示（ハイライト用）
+            originalDataEl.innerHTML = '';
+            const spans = originalData.map(char => {
+                const span = document.createElement('span');
+                span.textContent = char;
+                originalDataEl.appendChild(span);
+                return span;
+            });
+
+            // 3. 圧縮プロセスの視覚化 (async/await)
+            let compressedString = "";
+            const originalSize = originalData.length;
+
+            for (let i = 0; i < originalSize; i++) {
+                let count = 1;
+                let currentColor = originalData[i];
+
+                // 現在のスキャン位置をハイライト
+                spans[i].classList.add('scanning');
+                processEl.innerHTML = `[${currentColor}] をスキャン中... (Count: ${count})`;
+                await sleep(DELAY_MS);
+
+                // 次のピクセルが同じ色かチェック
+                while (i + 1 < originalSize && originalData[i + 1] === currentColor) {
+                    i++; // インデックスを進める
+                    count++;
+                    
+                    // 次のスキャン位置をハイライト
+                    spans[i].classList.add('scanning');
+                    processEl.innerHTML = `[${currentColor}] をスキャン中... (Count: ${count})`;
+                    await sleep(DELAY_MS);
+                }
+
+                // 色が変わったか、末尾に達した
+                const compressedPart = currentColor + count;
+                compressedString += compressedPart;
+                
+                processEl.innerHTML = `<b>[${currentColor}]</b> が <b>${count}</b> 個見つかりました。→ "${compressedPart}" を追加`;
+                compressedDataEl.textContent = compressedString;
+                await sleep(DELAY_MS * 2); // 結果を少し長めに見せる
+
+                // ハイライトをリセット
+                spans.forEach(span => span.classList.remove('scanning'));
+            }
+
+            // 4. 圧縮率の計算と表示
+            processEl.innerHTML = "圧縮が完了しました。";
+            
+            const compressedSize = compressedString.length;
+            // 圧縮率 = 圧縮後のデータサイズ / 元のデータサイズ
+            // (注: 実際のバイト数とは異なるが、ここでは単純な文字数で比較)
+            const ratio = (compressedSize / originalSize) * 100;
+            
+            let statsMessage = `元データサイズ: ${originalSize} 文字<br>`;
+            statsMessage += `圧縮後データサイズ: ${compressedSize} 文字<br>`;
+            statsMessage += `<strong>圧縮率: ${ratio.toFixed(1)}%</strong>`;
+
+            if (ratio < 100) {
+                statsMessage += ` (データ量が ${ (100 - ratio).toFixed(1) }% 削減されました)`;
+            } else if (ratio > 100) {
+                statsMessage += ` (データ量が ${ (ratio - 100).toFixed(1) }% 増加しました)`;
+            } else {
+                statsMessage += ` (データ量は変わりませんでした)`;
+            }
+            statsEl.innerHTML = statsMessage;
+
+            isCompressing = false;
+            toggleButtons(true); // ボタンを有効化
+        }
+
+        // --- ユーティリティ ---
+
+        // 遅延（スリープ）関数
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        // ボタンの有効/無効を切り替え
+        function toggleButtons(enable) {
+            compressBtn.disabled = !enable;
+            clearBtn.disabled = !enable;
+            sample1Btn.disabled = !enable;
+            sample2Btn.disabled = !enable;
+        }
+
+        // --- イベントリスナーの登録 ---
+        compressBtn.addEventListener('click', startCompression);
+        clearBtn.addEventListener('click', clearGrid);
+        sample1Btn.addEventListener('click', () => loadSample(samplePattern1));
+        sample2Btn.addEventListener('click', () => loadSample(samplePattern2));
+
+        // --- 初期化実行 ---
+        initGrid();
+        resetResults();
+
+    </script>
+</body>
+</html>
